@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Boss</title>
+<link rel="stylesheet" href="board.css">
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<header>
+  <h1>Agent Boss</h1>
+  <span id="conn" class="off">desconectado</span>
+  <span id="summary" class="muted"></span>
+  <label class="toggle"><input type="checkbox" id="showTools"> eventos de ferramenta</label>
+  <div class="srv" role="group" aria-label="Servidor">
+    <span class="muted" id="srvInfo"></span>
+    <button class="btn" id="btnRestart" type="button">Reiniciar servidor</button>
+    <button class="btn danger" id="btnStop" type="button">Parar servidor</button>
+  </div>
+</header>
+<div id="banner" class="banner" role="status" hidden></div>
+<main>
+  <div class="left">
+    <section class="external" id="external" aria-label="Sessões externas de Claude Code e Codex (somente leitura)" hidden>
+      <div class="ext-head">
+        <span class="ext-badge" aria-hidden="true">◉</span>
+        <h2>Fora do supervisor <span class="muted">· Claude Code e Codex nesta máquina, só observação</span></h2>
+        <span class="muted" id="extCount"></span>
+        <label class="toggle"><input type="checkbox" id="showIdle"> mostrar ociosas</label>
+      </div>
+      <div class="ext-list" id="extList"></div>
+    </section>
+    <section class="board" id="board" aria-label="Kanban de tarefas supervisionadas"></section>
+  </div>
+  <aside aria-label="Narração ao vivo"><h2>Narração</h2><ol id="log" aria-live="polite"></ol></aside>
+</main>
+
+<dialog id="inspect">
+  <form method="dialog" class="dlg-head">
+    <div>
+      <div class="dlg-title" id="dlgTitle"></div>
+      <div class="muted" id="dlgSub"></div>
+    </div>
+    <button class="btn" value="close" aria-label="Fechar">Fechar</button>
+  </form>
+  <nav class="tabs" id="dlgTabs"></nav>
+  <div class="dlg-body" id="dlgBody"></div>
+</dialog>
+
+<script src="board.js"></script>
+<script src="shader.js"></script>
+</body>
+</html>

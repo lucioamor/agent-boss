@@ -1,0 +1,4 @@
+node_modules/
+data/
+# internal notes, evidence logs, design discussions, roadmap (kept local, never committed)
+docs/internal/

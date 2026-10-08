@@ -1,0 +1,20 @@
+{
+  "name": "agent-boss",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Local supervisor that keeps long agent work alive across disposable Claude Code sessions, with a live Kanban board.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "serve": "node --disable-warning=ExperimentalWarning src/main.ts serve",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

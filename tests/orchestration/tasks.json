@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "goal": "Produce three reference number tables for the docs: primes.txt, fib.txt and squares.txt.",
+      "done": "All three tables exist with the exact expected values.",
+      "cwd": "../../data/orchestration-work",
+      "constraints": ["One number per line, no header, no trailing text.", "Only use the Read, Write and Glob tools."],
+      "parts": [
+        { "goal": "Write primes.txt containing the first 20 prime numbers, one per line.", "done": "primes.txt holds the first 20 primes, verified by reading it back.", "verify": "node ../../tests/orchestration/verify.mjs primes" },
+        { "goal": "Write fib.txt containing the first 20 Fibonacci numbers starting 1, 1, one per line.", "done": "fib.txt holds the first 20 Fibonacci numbers, verified by reading it back.", "verify": "node ../../tests/orchestration/verify.mjs fib" },
+        { "goal": "Write squares.txt containing the squares of 1..20, one per line.", "done": "squares.txt holds 1, 4, ..., 400, verified by reading it back.", "verify": "node ../../tests/orchestration/verify.mjs squares" }
+      ]
+    },
+    {
+      "goal": "Write hello.txt containing exactly the word ok.",
+      "done": "hello.txt contains ok, verified by reading it back.",
+      "cwd": "../../data/orchestration-work",
+      "constraints": ["Only use the Read, Write and Glob tools."],
+      "verify": "node ../../tests/orchestration/verify.mjs hello"
+    }
+  ]
+}
