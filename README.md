@@ -425,4 +425,4 @@ When reusing, redistributing, or citing this work, keep the attribution credits 
 
 ## Licença
 
-Apache-2.0 (declarada em `package.json`).
+Apache-2.0 — veja [LICENSE](./LICENSE).
