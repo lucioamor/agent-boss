@@ -6,7 +6,8 @@ import type { Orchestrator } from './orchestrator.ts';
 import type { Store } from './store.ts';
 import type { Supervisor } from './supervisor.ts';
 import type { TranscriptObserver } from './observer.ts';
-import { runRemote, type RemoteCommand } from './remote.ts';
+import { runRemote, type RemoteDeps } from './remote.ts';
+import { CloudLink, type CloudCommand } from './cloud.ts';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -26,6 +27,8 @@ export function startServer(opts: {
   defaults: { model: string };
   // Directories where commands from the hosted board may enqueue tasks. Empty disables enqueue_task.
   remoteRoots: string[];
+  // Hosted board link: where the token is saved and which board to pair with.
+  cloud: { file: string; url: string };
   // daemonPid is set when running under src/daemon.ts: the board can then restart its own server.
   admin: { daemonPid: number | null; request: (action: 'restart' | 'stop') => void };
   startedAt: string;
@@ -58,6 +61,53 @@ export function startServer(opts: {
     };
   };
 
+  const health = () => ({ ok: true, pid: process.pid, daemonPid: opts.admin.daemonPid, startedAt: opts.startedAt, liveExecutors: supervisor.liveCount() });
+
+  const remoteDeps: RemoteDeps = {
+    getTask: (id) => store.getTask(id) ?? undefined,
+    pause: (id) => orchestrator.pause(id),
+    resume: (id) => orchestrator.resume(id),
+    requestDrain: (id) => supervisor.requestDrain(id),
+    addOperatorConstraint: (id, text) => store.addOperatorConstraint(id, text),
+    countOperatorConstraints: (id) => store.getTask(id)?.constraints.filter((c) => c.id.startsWith('O')).length ?? 0,
+    submit: (spec) => orchestrator.submit(spec, opts.defaults),
+    note: (taskId, type, narration, data) => void bus.emit(type, narration, { taskId, data }),
+    roots: opts.remoteRoots,
+    defaultModel: opts.defaults.model,
+  };
+
+  // Commands from the hosted board, executed in-process by the cloud link.
+  const runCloudCommand = async (c: CloudCommand) => {
+    if (c.kind === 'handoff') {
+      const epoch = (c.payload as { epoch?: unknown } | null)?.epoch;
+      if (!c.task_id || !store.getTask(c.task_id)) return { ok: false, result: JSON.stringify({ error: 'task not found' }) };
+      const md = epoch != null
+        ? (store.listSessions(c.task_id).find((s) => s.epoch === Number(epoch))?.handoffMd ?? `(sessão ${epoch} não começou de um handoff)`)
+        : supervisor.handoffFor(c.task_id);
+      return { ok: true, result: md };
+    }
+    if (c.kind === 'restart' || c.kind === 'stop') {
+      if (c.kind === 'restart' && !opts.admin.daemonPid) return { ok: false, result: JSON.stringify({ error: 'restart needs the daemon: start with "Agent Boss.cmd"' }) };
+      // Ack first, then act: the process is about to go away.
+      setTimeout(() => opts.admin.request(c.kind as 'restart' | 'stop'), 1_500);
+      return { ok: true, result: JSON.stringify({ action: c.kind, liveExecutors: supervisor.liveCount() }) };
+    }
+    const r = runRemote(remoteDeps, { kind: c.kind, taskId: c.task_id, payload: c.payload });
+    return { ok: r.ok, result: JSON.stringify(r.result) };
+  };
+
+  const cloud = new CloudLink(
+    { file: opts.cloud.file, defaultUrl: opts.cloud.url, port: opts.port },
+    {
+      state,
+      health,
+      recentEvents: () => store.recentEvents(150, 0),
+      subscribe: (l) => bus.subscribe(l),
+      runCommand: runCloudCommand,
+      note: (narration) => void bus.emit('supervisor.note', narration),
+    },
+  );
+
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -83,7 +133,7 @@ export function startServer(opts: {
       }
       if (req.method === 'GET' && p === '/api/state') return json(res, 200, state());
       if (req.method === 'GET' && p === '/api/health') {
-        return json(res, 200, { ok: true, pid: process.pid, daemonPid: opts.admin.daemonPid, startedAt: opts.startedAt, liveExecutors: supervisor.liveCount() });
+        return json(res, 200, health());
       }
       if (req.method === 'POST' && (p === '/api/admin/restart' || p === '/api/admin/stop')) {
         const action = p.endsWith('restart') ? 'restart' : 'stop';
@@ -108,31 +158,25 @@ export function startServer(opts: {
         });
         return;
       }
-      if (req.method === 'POST' && p === '/api/remote/command') {
-        const raw = await readBody(req);
-        if (raw.length > 100_000) return json(res, 413, { error: 'command too large' });
-        let cmd: RemoteCommand;
+      if (req.method === 'GET' && p === '/api/cloud') return json(res, 200, cloud.status());
+      if (req.method === 'POST' && p === '/api/cloud/connect') return json(res, 200, { url: cloud.beginConnect() });
+      if (req.method === 'POST' && p === '/api/cloud/disconnect') {
+        await cloud.disconnect();
+        return json(res, 200, cloud.status());
+      }
+      if (req.method === 'GET' && p === '/cloud/callback') {
+        // Browser redirect from the hosted /connect page (RFC 8252 loopback redirect).
+        const code = url.searchParams.get('code') ?? '';
+        const st = url.searchParams.get('state') ?? '';
+        const denied = url.searchParams.get('error');
         try {
-          cmd = JSON.parse(raw);
-        } catch {
-          return json(res, 400, { error: 'invalid json' });
+          if (denied) throw new Error(denied === 'access_denied' ? 'conexão cancelada no board online' : denied.slice(0, 100));
+          if (!/^[\w-]{16,128}$/.test(code) || !/^[\w-]{16,128}$/.test(st)) throw new Error('resposta inválida do board online');
+          await cloud.finishConnect(code, st);
+          return redirect(res, '/?cloud=connected');
+        } catch (err) {
+          return redirect(res, `/?cloud=error&reason=${encodeURIComponent((err as Error).message)}`);
         }
-        const r = runRemote(
-          {
-            getTask: (id) => store.getTask(id) ?? undefined,
-            pause: (id) => orchestrator.pause(id),
-            resume: (id) => orchestrator.resume(id),
-            requestDrain: (id) => supervisor.requestDrain(id),
-            addOperatorConstraint: (id, text) => store.addOperatorConstraint(id, text),
-            countOperatorConstraints: (id) => store.getTask(id)?.constraints.filter((c) => c.id.startsWith('O')).length ?? 0,
-            submit: (spec) => orchestrator.submit(spec, opts.defaults),
-            note: (taskId, type, narration, data) => void bus.emit(type, narration, { taskId, data }),
-            roots: opts.remoteRoots,
-            defaultModel: opts.defaults.model,
-          },
-          cmd,
-        );
-        return json(res, r.status, r.result);
       }
       if (req.method === 'POST' && p === '/api/tasks') {
         const spec = JSON.parse(await readBody(req));
@@ -181,7 +225,10 @@ export function startServer(opts: {
 
   return new Promise<typeof server>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(opts.port, '127.0.0.1', () => resolve(server));
+    server.listen(opts.port, '127.0.0.1', () => {
+      cloud.start(); // no-op until this machine has been paired with the hosted board
+      resolve(server);
+    });
   });
 }
 
@@ -198,6 +245,11 @@ function readBody(req: IncomingMessage): Promise<string> {
 function send(res: ServerResponse, status: number, body: string | Buffer, type: string) {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
   res.end(body);
+}
+
+function redirect(res: ServerResponse, location: string) {
+  res.writeHead(303, { location, 'cache-control': 'no-store' });
+  res.end();
 }
 
 function json(res: ServerResponse, status: number, obj: unknown) {

@@ -153,6 +153,7 @@ const server = await startServer({
   publicDir: join(root, 'public'),
   defaults: { model: values.model! },
   remoteRoots: [...(values['remote-root'] as string[]), ...(process.env.AGENT_BOSS_REMOTE_ROOTS ?? '').split(delimiter)].filter(Boolean).map((d) => resolve(d)),
+  cloud: { file: join(dirname(dbPath), 'cloud.json'), url: process.env.AGENT_BOSS_CLOUD_URL ?? 'https://agentic-boss.lovable.app' },
   admin: { daemonPid, request: (action) => void stopServer(action) },
   startedAt: new Date().toISOString(),
 });

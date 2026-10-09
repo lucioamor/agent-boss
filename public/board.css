@@ -211,6 +211,7 @@ table.ops th, table.ops td { text-align: left; padding: 4px 6px; border-bottom: 
 /* Server controls */
 .srv { display: flex; align-items: center; gap: 6px; }
 .btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.btn.ok { border-color: var(--ok); color: var(--ok); }
 .banner { position: relative; z-index: 2; margin: 0; padding: 9px 20px; font-size: 13px;
   background: color-mix(in srgb, var(--warn) 16%, var(--panel)); border-bottom: 1px solid var(--line); }
 .banner.bad { background: color-mix(in srgb, var(--bad) 16%, var(--panel)); }

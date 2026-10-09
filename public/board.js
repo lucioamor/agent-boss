@@ -490,6 +490,43 @@ async function adminAction(action) {
   showBanner('O servidor não voltou em 30 s. Veja <code>data/agent-boss.log</code> ou abra pelo <code>Agent Boss.cmd</code>.', true);
 }
 
+// Hosted board link. Connecting navigates this tab to the hosted /connect page (sign in, confirm);
+// it redirects back to /cloud/callback, which lands here with ?cloud=connected or ?cloud=error.
+const btnCloud = $('btnCloud');
+let cloud = null;
+
+async function loadCloud() {
+  cloud = await fetch('/api/cloud', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
+  if (!cloud) return;
+  btnCloud.textContent = cloud.connected ? `Online: ${cloud.email ?? cloud.machine}` : 'Conectar ao board online';
+  btnCloud.classList.toggle('ok', cloud.connected && !cloud.lastError);
+  btnCloud.title = cloud.connected
+    ? `Conectado a ${cloud.url}${cloud.lastError ? `\nÚltimo erro: ${cloud.lastError}` : ''}\nClique para desconectar esta máquina.`
+    : `Abre ${cloud.url} para entrar com sua conta e autorizar esta máquina.`;
+}
+
+btnCloud.addEventListener('click', async () => {
+  await loadCloud();
+  if (cloud?.connected) {
+    if (!confirm(`Desconectar esta máquina do board online (${cloud.url})?\n\nO board online deixa de ver e de controlar este agent-boss.`)) return;
+    await fetch('/api/cloud/disconnect', { method: 'POST', headers: { 'x-agent-boss': '1' } });
+    showBanner('Máquina desconectada do board online.');
+    return loadCloud();
+  }
+  const r = await fetch('/api/cloud/connect', { method: 'POST', headers: { 'x-agent-boss': '1' } }).then((x) => x.json()).catch(() => null);
+  if (r?.url) location.href = r.url;
+  else showBanner('Não foi possível iniciar a conexão com o board online.', true);
+});
+
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get('cloud') === 'connected') showBanner('Conectado ao board online. Esta máquina já aparece lá.');
+  if (q.get('cloud') === 'error') showBanner(`Conexão com o board online falhou: ${esc(q.get('reason') ?? 'erro desconhecido')}`, true);
+  if (q.has('cloud')) history.replaceState(null, '', '/');
+}
+loadCloud();
+setInterval(loadCloud, 15_000);
+
 btnRestart.addEventListener('click', () => adminAction('restart'));
 btnStop.addEventListener('click', () => adminAction('stop'));
 es.addEventListener('open', loadHealth);
