@@ -19,6 +19,7 @@ outras sessões de Claude Code e Codex abertas na mesma máquina.
 - [Uso pela linha de comando](#uso-pela-linha-de-comando)
 - [O board](#o-board)
 - [Sessões externas: Claude Code e Codex](#sessões-externas-claude-code-e-codex)
+- [Board online (opcional)](#board-online-opcional)
 - [API HTTP e eventos](#api-http-e-eventos)
 - [Arquitetura](#arquitetura)
 - [Testes](#testes)
@@ -221,6 +222,20 @@ node src/main.ts serve
 | `--observe-dir` / `--codex-dir` | `~/.claude/projects` / `~/.codex` | fontes das sessões externas |
 | `--no-observe` | — | desliga a faixa de sessões externas |
 | `--keep-open` | — | mantém o board no ar depois que as tarefas terminam |
+| `--remote-root <dir>` | nenhum | libera criação remota de tarefas dentro deste diretório; pode ser repetido |
+
+Variáveis de ambiente da integração online:
+
+| variável | padrão | efeito |
+|---|---|---|
+| `AGENT_BOSS_REMOTE_ROOTS` | nenhum | roots adicionais aos de `--remote-root`, separados por `;` no Windows ou `:` nos demais sistemas |
+| `AGENT_BOSS_CLOUD_URL` | `https://agentic-boss.lovable.app` | endereço do board online usado para pareamento |
+
+Exemplo para liberar **Nova tarefa** remota em um repositório:
+
+```bash
+node src/main.ts serve --remote-root C:/AI/meu-repo
+```
 
 Formato do `batch`:
 
@@ -300,6 +315,57 @@ aparecem como externas. Mudanças de estado relevantes (sessão ficou ativa, par
 Para demonstrar sem expor sessões reais, `node scripts/demo-fixtures.mjs` gera transcrições
 sintéticas, que podem ser usadas com `--observe-dir data/demo/claude/projects --codex-dir data/demo/codex`.
 
+## Board online (opcional)
+
+O [board online](https://agentic-boss.lovable.app) é um board hospedado que mostra o estado
+do agent-boss e envia comandos para esta máquina. A integração roda dentro do servidor local:
+ele envia estado e eventos e busca comandos por long-poll.
+
+**Pareamento com um clique:** no board local, clique em **Conectar ao board online**, faça
+login no site e confirme a conexão; o navegador retorna ao loopback
+`http://127.0.0.1:<porta>/cloud/callback` e volta ao board local. É um fluxo OAuth loopback com
+PKCE (RFC 8252), como o `gh auth login`: um código de uso único é trocado pelo token, salvo em
+`data/cloud.json`, que o git ignora. Com `--db` personalizado, `cloud.json` fica no diretório
+do banco. O vínculo salvo é retomado quando o servidor inicia.
+
+**A conexão é de saída:** o agent-boss abre as requisições ao serviço; nenhuma porta é exposta
+à internet e nada na internet chama a máquina. O retorno do pareamento é uma navegação do
+próprio navegador ao loopback local.
+
+| comando | efeito |
+|---|---|
+| `pause` | pausa a tarefa; drena a sessão em andamento e salva checkpoint |
+| `resume` | devolve a tarefa ao agendamento para continuar em uma sessão nova com handoff |
+| `drain` | pede checkpoint e troca a sessão ativa ou em validação, sem pausar a tarefa; recusa se não houver sessão elegível |
+| `send_prompt` | salva uma instrução permanente do operador e, por padrão, pede a troca de sessão |
+| `enqueue_task` | cria uma tarefa com `goal`, `done` e `cwd` absoluto dentro dos roots liberados; aceita `constraints` e `model` opcionais |
+| `handoff` | consulta o Markdown do próximo pacote de continuidade, ou o pacote recebido por uma sessão com `epoch` informado |
+| `restart` | reinicia o servidor; exige execução sob o daemon, como ao abrir `Agent Boss.cmd` |
+| `stop` | encerra o servidor e, quando presente, o daemon |
+
+**`send_prompt` vira uma restrição `O<n>`** (`O1`, `O2`…), persistida no SQLite. A próxima
+sessão precisa confirmá-la no `resume_ack` antes de liberar escrita. A sessão atual não recebe
+o texto diretamente: por padrão, ela é drenada para que a sucessora receba a instrução no
+handoff. Com `rotate: false`, a instrução fica para a próxima sessão sem pedir troca imediata.
+
+**Limites de segurança:** `src/remote.ts` aceita só `pause`, `resume`, `drain`, `send_prompt`
+e `enqueue_task`; comandos desconhecidos são recusados. `src/server.ts` trata separadamente
+`handoff`, `restart` e `stop`. Sem roots configurados por `--remote-root` ou
+`AGENT_BOSS_REMOTE_ROOTS`, `enqueue_task` fica desligado. Na criação remota, `verify`,
+`executor` e `parts` são recusados: `verify` é um comando shell, e os outros ampliam o que
+seria executado.
+
+Os limites são de 4.000 caracteres para instrução, objetivo e critério de conclusão; 1.000
+para `cwd` e cada restrição; até 20 restrições na criação e 20 instruções `O<n>` por tarefa.
+O identificador de modelo tem até 64 caracteres e formato validado em `src/remote.ts`.
+
+**Desconectar:** no board local, clique no botão **Online: …** e confirme a desconexão,
+ou revogue o vínculo pelo board online.
+A desconexão local interrompe a sincronização, apaga `cloud.json` e tenta revogar o token no
+serviço. Se o serviço recusar o token com HTTP 401, o vínculo também é encerrado e o arquivo
+apagado; o status registra o erro e é preciso conectar de novo. Desconectar o board online
+não pausa nem encerra as tarefas locais.
+
 ## API HTTP e eventos
 
 | rota | |
@@ -308,6 +374,10 @@ sintéticas, que podem ser usadas com `--observe-dir data/demo/claude/projects -
 | `GET /api/state` | tarefas com sessões, sessão viva, orçamento, último checkpoint, repositório, e `external` |
 | `GET /api/external` | só as sessões externas |
 | `GET /api/health` | pid do servidor, pid do daemon, início, executores ativos |
+| `GET /api/cloud` | status do vínculo online, endereço, máquina, conta, horários de conexão e último envio, e último erro; não retorna o token |
+| `POST /api/cloud/connect` | inicia o pareamento e retorna a URL de login e confirmação do board online |
+| `POST /api/cloud/disconnect` | encerra o vínculo online, apaga o token local e tenta revogá-lo no serviço |
+| `GET /cloud/callback` | retorno do pareamento: valida código e state, troca o código com PKCE e redireciona ao board local com sucesso ou erro |
 | `GET /api/tasks/:id` | detalhe: sessões, checkpoints, operações |
 | `GET /api/tasks/:id/handoff[?epoch=N]` | Markdown do handoff gerado do SQLite: o próximo, ou o que a sessão N recebeu |
 | `POST /api/tasks` | cria tarefa (`goal`, `done`, `cwd`, `constraints?`, `verify?`, `parts?`, `executor?`) |
@@ -322,11 +392,15 @@ curl -X POST -H "x-agent-boss: 1" -H "content-type: application/json" \
   -d @tarefa.json http://127.0.0.1:7777/api/tasks
 ```
 
-Tipos de evento: `task.created`, `task.status`, `task.paused`, `task.resumed`, `session.started`,
+Tipos de evento: `task.created`, `task.status`, `task.paused`, `task.resumed`, `task.drain`,
+`task.instruction`, `session.started`,
 `session.phase`, `session.context`, `session.ended`, `tool.started`, `tool.finished`,
 `tool.denied`, `checkpoint.saved`, `constraint.learned`, `verify.started`, `verify.finished`,
 `handoff.started`, `handoff.validated`, `handoff.rejected`, `supervisor.recovered`,
 `supervisor.note`, `external.session`.
+
+`task.drain` registra uma troca de sessão pedida pelo operador, com o epoch em `data`;
+`task.instruction` registra uma instrução remota persistida, com seu `constraintId`.
 
 ## Arquitetura
 
@@ -360,7 +434,8 @@ Tipos de evento: `task.created`, `task.status`, `task.paused`, `task.resumed`, `
 ## Testes
 
 Os testes de aceitação abaixo rodam **sessões reais** e consomem a assinatura; usam o modelo
-`sonnet` e tarefas pequenas. O teste do observador não chama nenhum modelo.
+`sonnet` e tarefas pequenas. Os testes do observador, dos comandos remotos e da integração
+online não chamam nenhum modelo; a integração online usa um serviço HTTP local simulado.
 
 | teste | comando | o que prova |
 |---|---|---|
@@ -369,6 +444,8 @@ Os testes de aceitação abaixo rodam **sessões reais** e consomem a assinatura
 | orquestração | `node src/main.ts batch --file tests/orchestration/tasks.json --db data/orchestration.db --parallel 4` | executores em paralelo; tarefa simples = um executor |
 | interface | `node tests/ui/motion-and-contrast.mjs` (com `serve` no ar) | sem animação parada, movimento só após mudanças reais, contraste, reduced motion |
 | observador | `node --disable-warning=ExperimentalWarning tests/observer.test.ts` | parser de Claude Code e Codex, mesmo repo, e prova de que nada é escrito |
+| comandos remotos | `node --disable-warning=ExperimentalWarning tests/remote.test.ts` | allowlist, instrução com rotação padrão, limites, roots permitidos e recusa de `verify`, `executor` e `parts`, com dependências simuladas |
+| integração online | `node --disable-warning=ExperimentalWarning tests/cloud.test.ts` | pareamento PKCE, validação de state, persistência do token, envio de estado/eventos, busca e confirmação de comandos e desvinculação após HTTP 401, com serviço local simulado |
 
 Ferramentas de inspeção somente leitura:
 - `node scripts/evidence.mjs <db> [task] [workdir]`: sessões, acks, operações e escritas por
@@ -415,6 +492,10 @@ Resultados das execuções reais (Claude Code 2.1.x, `sonnet`, Windows 11):
 - **Órfãos são identificados por pid e nome da imagem**; reuso de pid é improvável, mas
   possível. O caminho de kill fora do Windows não foi testado.
 - **Um supervisor por banco.** O board não tem autenticação além da proteção local.
+- **O board online depende de um serviço externo.** A sincronização e os comandos remotos
+  dependem da disponibilidade dele; os testes locais não validam o serviço hospedado.
+- **Nova tarefa remota só funciona dentro dos roots liberados** por `--remote-root` ou
+  `AGENT_BOSS_REMOTE_ROOTS`; sem eles, a criação remota fica desligada.
 - A tabela `events` cresce sem limpeza automática.
 
 ## Authorship and maintenance
