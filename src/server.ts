@@ -6,6 +6,7 @@ import type { Orchestrator } from './orchestrator.ts';
 import type { Store } from './store.ts';
 import type { Supervisor } from './supervisor.ts';
 import type { TranscriptObserver } from './observer.ts';
+import { runRemote, type RemoteCommand } from './remote.ts';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -23,6 +24,8 @@ export function startServer(opts: {
   publicDir: string;
   observer: TranscriptObserver | null;
   defaults: { model: string };
+  // Directories where commands from the hosted board may enqueue tasks. Empty disables enqueue_task.
+  remoteRoots: string[];
   // daemonPid is set when running under src/daemon.ts: the board can then restart its own server.
   admin: { daemonPid: number | null; request: (action: 'restart' | 'stop') => void };
   startedAt: string;
@@ -104,6 +107,32 @@ export function startServer(opts: {
           clearInterval(ping);
         });
         return;
+      }
+      if (req.method === 'POST' && p === '/api/remote/command') {
+        const raw = await readBody(req);
+        if (raw.length > 100_000) return json(res, 413, { error: 'command too large' });
+        let cmd: RemoteCommand;
+        try {
+          cmd = JSON.parse(raw);
+        } catch {
+          return json(res, 400, { error: 'invalid json' });
+        }
+        const r = runRemote(
+          {
+            getTask: (id) => store.getTask(id) ?? undefined,
+            pause: (id) => orchestrator.pause(id),
+            resume: (id) => orchestrator.resume(id),
+            requestDrain: (id) => supervisor.requestDrain(id),
+            addOperatorConstraint: (id, text) => store.addOperatorConstraint(id, text),
+            countOperatorConstraints: (id) => store.getTask(id)?.constraints.filter((c) => c.id.startsWith('O')).length ?? 0,
+            submit: (spec) => orchestrator.submit(spec, opts.defaults),
+            note: (taskId, type, narration, data) => void bus.emit(type, narration, { taskId, data }),
+            roots: opts.remoteRoots,
+            defaultModel: opts.defaults.model,
+          },
+          cmd,
+        );
+        return json(res, r.status, r.result);
       }
       if (req.method === 'POST' && p === '/api/tasks') {
         const spec = JSON.parse(await readBody(req));

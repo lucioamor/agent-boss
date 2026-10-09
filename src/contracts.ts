@@ -117,6 +117,8 @@ export type EventType =
   | 'task.status'
   | 'task.paused'
   | 'task.resumed'
+  | 'task.drain'
+  | 'task.instruction'
   | 'session.started'
   | 'session.phase'
   | 'session.context'

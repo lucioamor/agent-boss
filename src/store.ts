@@ -156,6 +156,18 @@ export class Store {
     return added;
   }
 
+  // Operator instruction (e.g. from the hosted board). Stored as a hard constraint with an "O"
+  // id, so the next session must acknowledge it in its resume_ack before writes unlock.
+  addOperatorConstraint(id: string, text: string): Constraint {
+    const task = this.getTask(id)!;
+    const n = task.constraints.filter((c) => c.id.startsWith('O')).length + 1;
+    const added: Constraint = { id: `O${n}`, text: text.trim() };
+    this.db
+      .prepare(`UPDATE tasks SET constraints = ?, updated_at = ? WHERE id = ?`)
+      .run(JSON.stringify([...task.constraints, added]), now(), id);
+    return added;
+  }
+
   // --- sessions ---
 
   createSession(taskId: string, epoch: number, executor: ExecutorKind): SessionRecord {

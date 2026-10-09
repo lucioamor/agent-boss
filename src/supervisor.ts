@@ -39,7 +39,7 @@ interface LiveSession {
   task: Task;
   rec: SessionRecord;
   phase: SessionPhase;
-  drainReason: 'budget' | 'pause' | 'timeout' | null;
+  drainReason: 'budget' | 'pause' | 'timeout' | 'operator' | null;
   exec: Executor;
   ctxTokens: number;
   ctxWindow: number;
@@ -154,7 +154,8 @@ export class Supervisor {
       return deny('this session no longer owns the task lease. Do not call any tools. End your turn.');
     }
     if (s.phase === 'draining') {
-      const why = s.drainReason === 'pause' ? 'pause requested by the operator' : 'context budget reached';
+      const why =
+        s.drainReason === 'pause' ? 'pause requested by the operator' : s.drainReason === 'operator' ? 'operator requested a fresh session' : 'context budget reached';
       return deny(
         `${why}. Do not call any more tools. End your turn NOW with the checkpoint block ` +
           '(status "in_progress" unless the task is truly done and verified).',
@@ -181,6 +182,17 @@ export class Supervisor {
       taskId,
       data: { live: !!s },
     });
+    return true;
+  }
+
+  // Operator asked for a handoff now: drain the live session (checkpoint, then stop) without
+  // pausing the task, so the scheduler starts the next session from a fresh handoff package.
+  requestDrain(taskId: string): boolean {
+    const s = [...this.live.values()].find((l) => l.task.id === taskId);
+    if (!s || (s.phase !== 'active' && s.phase !== 'validating')) return false;
+    s.drainReason = 'operator';
+    this.setPhase(s, 'draining');
+    this.bus.emit('task.drain', `Troca de sessão pedida: sessão ${s.rec.epoch} vai salvar checkpoint e ser substituída.`, { taskId, data: { epoch: s.rec.epoch } });
     return true;
   }
 

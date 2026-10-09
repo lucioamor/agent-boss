@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
+import { resolve, dirname, join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.ts';
 import { EventBus } from './bus.ts';
@@ -40,6 +40,8 @@ options:
   --observe-dir <dir>        Claude Code transcripts to watch read-only, default: ~/.claude/projects
   --codex-dir <dir>          Codex home whose sessions/ are watched read-only, default: ~/.codex
   --no-observe               do not show external (non-supervised) Claude Code / Codex sessions
+  --remote-root <dir>        allow hosted-board enqueue_task commands to run under <dir> (repeatable;
+                             also AGENT_BOSS_REMOTE_ROOTS, path-delimited). Default: none, disabled.
 `;
 
 const { values, positionals } = parseArgs({
@@ -68,6 +70,7 @@ const { values, positionals } = parseArgs({
     'observe-dir': { type: 'string' },
     'codex-dir': { type: 'string' },
     'no-observe': { type: 'boolean', default: false },
+    'remote-root': { type: 'string', multiple: true, default: [] },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -149,6 +152,7 @@ const server = await startServer({
   observer,
   publicDir: join(root, 'public'),
   defaults: { model: values.model! },
+  remoteRoots: [...(values['remote-root'] as string[]), ...(process.env.AGENT_BOSS_REMOTE_ROOTS ?? '').split(delimiter)].filter(Boolean).map((d) => resolve(d)),
   admin: { daemonPid, request: (action) => void stopServer(action) },
   startedAt: new Date().toISOString(),
 });
